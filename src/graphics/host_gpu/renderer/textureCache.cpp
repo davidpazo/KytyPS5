@@ -1812,6 +1812,7 @@ VulkanImage* TextureCache::FindTexture(CommandBuffer* command, GraphicContext* c
 		     info.address, info.size, metadata_read);
 	}
 	std::shared_ptr<CachedImage> storage_match;
+	std::vector<CachedImage*>    retire_storage;
 	const auto requested_view_format = TextureGetFormat(info.format, TextureFormatUsage::Sampled);
 	for (auto& cached: m_images) {
 		if (cached->kind != CachedImage::Kind::StorageTexture) {
@@ -1829,6 +1830,7 @@ VulkanImage* TextureCache::FindTexture(CommandBuffer* command, GraphicContext* c
 				}
 				storage_match = cached;
 				break;
+			case StorageSampledOverlap::RetireStorage: retire_storage.push_back(cached.get()); break;
 			case StorageSampledOverlap::Unsupported:
 				EXIT("TextureCache: unsupported sampled/storage image alias, "
 				     "requested=0x%016" PRIx64 "+0x%016" PRIx64 " storage=0x%016" PRIx64
@@ -1846,6 +1848,17 @@ VulkanImage* TextureCache::FindTexture(CommandBuffer* command, GraphicContext* c
 				     cached->info.levels, cached->info.view_levels, cached->info.tile,
 				     cached->info.swizzle, cached->info.type, cached->info.base_array);
 		}
+	}
+	if (!retire_storage.empty()) {
+		if (storage_match != nullptr) {
+			EXIT("TextureCache: sampled binding both reuses and retires storage images, "
+			     "addr=0x%016" PRIx64 " size=0x%016" PRIx64 " retire=%zu\n",
+			     info.address, info.size, retire_storage.size());
+		}
+		// Every retired record is clean, so no readback is outstanding and the device cannot be
+		// holding GPU-only contents that a wait would flush.
+		RequireRetirementIsolation(retire_storage, "sampled storage alias", info.address, info.size);
+		RetireImages(retire_storage);
 	}
 	if (storage_match != nullptr) {
 		if (m_memory_tracker.IsRegionCpuModified(info.address, info.size) ||

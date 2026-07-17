@@ -186,7 +186,7 @@ enum class RenderTargetOverlap : uint8_t {
 	Unsupported
 };
 enum class SampledOverlap : uint8_t { None, ReadOnlyAlias, Unsupported };
-enum class StorageSampledOverlap : uint8_t { None, ExactImage, Unsupported };
+enum class StorageSampledOverlap : uint8_t { None, ExactImage, RetireStorage, Unsupported };
 enum class StorageSampledViewShape : uint8_t { Image2D, Image2DArray, Image3D, Unsupported };
 enum class StorageImageOverlap : uint8_t { None, RetireSampled, PageNeighbor, Unsupported };
 enum class HostWriteOverlap : uint8_t { None, InvalidateImage, Unsupported };
@@ -417,10 +417,18 @@ ClassifyStorageSampledOverlap(const ImageInfo& requested, const ImageInfo& cache
 	const bool compatible_format =
 	    (requested.format == cached.format && requested_view_format == cached_image_format) ||
 	    IsRgba8SrgbReinterpretation(cached_image_format, requested_view_format);
-	return same_backing && compatible_format && cached_gpu_modified && !cached_cpu_dirty &&
-	               same_context
-	           ? StorageSampledOverlap::ExactImage
-	           : StorageSampledOverlap::Unsupported;
+	if (same_backing && compatible_format && cached_gpu_modified && !cached_cpu_dirty &&
+	    same_context) {
+		return StorageSampledOverlap::ExactImage;
+	}
+	// A storage image with a different backing describes an unrelated resource that merely shares
+	// the requested texture's memory: the guest recycled the range. Once its readback has completed
+	// the record no longer owns any GPU-only data, so guest memory is authoritative for the whole
+	// range and the stale record can be retired rather than aliasing the new sampled image.
+	if (!same_backing && !cached_gpu_modified && !cached_cpu_dirty && same_context) {
+		return StorageSampledOverlap::RetireStorage;
+	}
+	return StorageSampledOverlap::Unsupported;
 }
 
 [[nodiscard]] inline HostWriteOverlap

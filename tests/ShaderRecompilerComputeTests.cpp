@@ -9969,6 +9969,50 @@ void CheckStorageTextureSampledReuse() {
               StorageSampledOverlap::None,
           "disjoint storage image was classified as an alias");
 
+  // PPSA15929 recycles the tail pages of a retired 8x8 linear storage image for a
+  // 4KB-tiled 72x74 texture. The storage record is already read back, so guest memory
+  // owns the whole range and the stale record must be retired, not treated as an alias.
+  ImageInfo ppsa15929_sampled{};
+  ppsa15929_sampled.address = 0x64722000;
+  ppsa15929_sampled.size = 0x9000;
+  ppsa15929_sampled.format = Prospero::GpuEnumValue(Prospero::BufferFormat::k8_8_8_8UNorm);
+  ppsa15929_sampled.width = 72;
+  ppsa15929_sampled.height = 74;
+  ppsa15929_sampled.pitch = 72;
+  ppsa15929_sampled.tile = Prospero::GpuEnumValue(Prospero::TileMode::kStandard4KB);
+  ppsa15929_sampled.swizzle = DstSel(4, 5, 6, 7);
+  ppsa15929_sampled.type = Prospero::GpuEnumValue(Prospero::ImageType::kColor2D);
+  ImageInfo ppsa15929_storage{};
+  ppsa15929_storage.address = 0x6472a900;
+  ppsa15929_storage.size = 0x800;
+  ppsa15929_storage.format = Prospero::GpuEnumValue(Prospero::BufferFormat::k16_16_16_16Float);
+  ppsa15929_storage.width = 8;
+  ppsa15929_storage.height = 8;
+  ppsa15929_storage.pitch = 32;
+  ppsa15929_storage.tile = Prospero::GpuEnumValue(Prospero::TileMode::kLinear);
+  ppsa15929_storage.swizzle = DstSel(4, 5, 6, 7);
+  ppsa15929_storage.type = Prospero::GpuEnumValue(Prospero::ImageType::kColor2DArray);
+  Require("StorageTextureSampledReuse", "PPSA15929 recycled range",
+          ClassifyStorageSampledOverlap(
+              ppsa15929_sampled, ppsa15929_storage, VK_FORMAT_R8G8B8A8_UNORM,
+              VK_FORMAT_R16G16B16A16_SFLOAT, false, false, true) ==
+              StorageSampledOverlap::RetireStorage,
+          "clean storage image on a recycled range was not retired for sampling");
+  Require("StorageTextureSampledReuse", "recycled range ownership",
+          ClassifyStorageSampledOverlap(
+              ppsa15929_sampled, ppsa15929_storage, VK_FORMAT_R8G8B8A8_UNORM,
+              VK_FORMAT_R16G16B16A16_SFLOAT, true, false, true) ==
+                  StorageSampledOverlap::Unsupported &&
+              ClassifyStorageSampledOverlap(
+                  ppsa15929_sampled, ppsa15929_storage, VK_FORMAT_R8G8B8A8_UNORM,
+                  VK_FORMAT_R16G16B16A16_SFLOAT, false, true, true) ==
+                  StorageSampledOverlap::Unsupported &&
+              ClassifyStorageSampledOverlap(
+                  ppsa15929_sampled, ppsa15929_storage, VK_FORMAT_R8G8B8A8_UNORM,
+                  VK_FORMAT_R16G16B16A16_SFLOAT, false, false, false) ==
+                  StorageSampledOverlap::Unsupported,
+          "a storage image owning data or state was retired for a recycled range");
+
   ImageInfo ppsa02604_storage{};
   ppsa02604_storage.address = 0x7c690000;
   ppsa02604_storage.size = 0x870000;
