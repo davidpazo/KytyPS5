@@ -2495,9 +2495,20 @@ DepthStencilVulkanImage* TextureCache::FindDepthTarget(CommandBuffer* command, G
 		}
 		if (!supported) {
 			EXIT("TextureCache: unsupported depth-target alias, depth=0x%016" PRIx64
-			     "+0x%016" PRIx64 " existing_kind=%u existing=0x%016" PRIx64 "+0x%016" PRIx64 "\n",
+			     "+0x%016" PRIx64 " existing_kind=%u existing=0x%016" PRIx64 "+0x%016" PRIx64
+			     " overlap=%u cached_gpu_modified=%d cached_buffer_modified=%d same_context=%d"
+			     " depth_info={guest_format=%u format=%d extent=%ux%u pitch=%u tile=%u load_clear=%d"
+			     " stencil=0x%016" PRIx64 "+0x%016" PRIx64 "}"
+			     " cached_tex_info={format=%u extent=%ux%ux%u pitch=%u tile=%u levels=%u"
+			     " view_levels=%u base_level=%u type=%u base_array=%u}\n",
 			     info.address, info.size, static_cast<uint32_t>(cached.kind), cached.Address(),
-			     cached.Size());
+			     cached.Size(), static_cast<uint32_t>(overlap), cached.gpu_modified,
+			     cached.buffer_modified, cached.ctx == ctx, info.guest_format,
+			     static_cast<int>(info.format), info.width, info.height, info.pitch, info.tile_mode,
+			     info.depth_load_clear, info.stencil_address, info.stencil_size, cached.info.format,
+			     cached.info.width, cached.info.height, cached.info.depth, cached.info.pitch,
+			     cached.info.tile, cached.info.levels, cached.info.view_levels,
+			     cached.info.base_level, cached.info.type, cached.info.base_array);
 		}
 		retire.push_back(&cached);
 	}
