@@ -40,6 +40,11 @@
 
 namespace Libs::Network {
 
+// Defined in namespace NetCtl far below; the offline-connect guard in namespace Net needs it first.
+namespace NetCtl {
+static bool NetCtlConnected();
+} // namespace NetCtl
+
 class Network {
 public:
 	class Id {
@@ -1016,6 +1021,18 @@ static int ConvertGuestSockaddr(const void* addr, uint32_t addrlen, sockaddr_sto
 	return 0;
 }
 
+// A loopback target (127.0.0.0/8) is local IPC and must keep working even offline; anything else is
+// an external host that the forced-offline emulator must not actually reach.
+static bool IsLoopbackSockaddr(const sockaddr_storage& addr) {
+	if (addr.ss_family == AF_INET) {
+		const auto* in = reinterpret_cast<const sockaddr_in*>(&addr);
+		uint32_t    v  = 0;
+		std::memcpy(&v, &in->sin_addr, sizeof(v));
+		return (ntohl(v) >> 24u) == 127u;
+	}
+	return false;
+}
+
 static int ConvertHostSockaddr(const sockaddr_storage* addr, int addrlen, void* out,
                                uint32_t* out_len) {
 	EXIT_IF(addr == nullptr);
@@ -1680,6 +1697,17 @@ int KYTY_SYSV_ABI Connect(int s, const void* addr, uint32_t addrlen) {
 	sockaddr_storage host_addr {};
 	int              host_addrlen = 0;
 	if (ConvertGuestSockaddr(addr, addrlen, &host_addr, &host_addrlen) != 0) {
+		return -1;
+	}
+
+	// The emulator declares itself offline (NetCtl reports disconnected), but this path otherwise
+	// opens a real outbound connection to whatever host the title requests -- online handshakes,
+	// telemetry, ads -- from the user's own address. Refuse external connects while offline: it
+	// keeps that promise, avoids leaking traffic, and gives titles a definitive "network
+	// unreachable" instead of a socket stuck connecting forever. Loopback IPC still works.
+	if (!NetCtl::NetCtlConnected() && !IsLoopbackSockaddr(host_addr)) {
+		LOGF("\t refused external connect while offline\n");
+		*Posix::GetErrorAddr() = Posix::POSIX_ENETUNREACH;
 		return -1;
 	}
 
