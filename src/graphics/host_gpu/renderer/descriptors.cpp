@@ -413,14 +413,33 @@ void ValidateMetadataReuseTexture(const ShaderRecompiler::IR::ImageResource& res
 	constexpr uint32_t field1_reserved = 0x200fff00u;
 	constexpr uint32_t field2_reserved = 0xf0003000u;
 	const auto         format          = descriptor.Format();
-	if (!IsSupportedSampledColorResource(resource) || size == 0 ||
-	    (descriptor.fields[1] & field1_reserved) != 0 ||
-	    (descriptor.fields[2] & field2_reserved) != 0 || descriptor.fields[3] != 0x90500facu ||
-	    descriptor.fields[4] != 0 || descriptor.fields[5] != 0x00700000u ||
-	    descriptor.fields[6] != 0 || descriptor.fields[7] != 0 ||
-	    !Prospero::IsSupportedTextureFormat(format) || Prospero::IsUintTextureFormat(format)) {
-		EXIT("unsupported storage texture descriptor encoding\n");
+	const bool         resource_ok     = IsSupportedSampledColorResource(resource);
+	const bool         field1_ok       = (descriptor.fields[1] & field1_reserved) == 0;
+	const bool         field2_ok       = (descriptor.fields[2] & field2_reserved) == 0;
+	const bool         field3_ok       = descriptor.fields[3] == 0x90500facu;
+	const bool         field4_ok       = descriptor.fields[4] == 0;
+	const bool         field5_ok       = descriptor.fields[5] == 0x00700000u;
+	const bool         field67_ok      = descriptor.fields[6] == 0 && descriptor.fields[7] == 0;
+	const bool         format_ok =
+	    Prospero::IsSupportedTextureFormat(format) && !Prospero::IsUintTextureFormat(format);
+	if (resource_ok && field1_ok && field2_ok && field3_ok && field4_ok && field5_ok && field67_ok &&
+	    format_ok && size != 0) {
+		return;
 	}
+	EXIT("unsupported metadata-reuse texture: resource=%d field1=%d field2=%d field3=%d field4=%d "
+	     "field5=%d field67=%d format=%d size=0x%016" PRIx64 " addr=0x%016" PRIx64
+	     " extent=%ux%ux%u type=%u format=%u tile=%u swizzle=0x%03x base_level=%u last_level=%u"
+	     " max_mip=%u base_array=%u read=%d written=%d"
+	     " fields={0x%08x 0x%08x 0x%08x 0x%08x 0x%08x 0x%08x 0x%08x 0x%08x}\n",
+	     resource_ok, field1_ok, field2_ok, field3_ok, field4_ok, field5_ok, field67_ok, format_ok,
+	     size, descriptor.Base40(), static_cast<uint32_t>(descriptor.Width5()) + 1u,
+	     static_cast<uint32_t>(descriptor.Height5()) + 1u,
+	     static_cast<uint32_t>(descriptor.Depth()) + 1u, descriptor.Type(), format,
+	     descriptor.TileMode(), descriptor.DstSelXYZW(), descriptor.BaseLevel(),
+	     descriptor.LastLevel(), descriptor.MaxMip(), descriptor.BaseArray5(), resource.read,
+	     resource.written, descriptor.fields[0], descriptor.fields[1], descriptor.fields[2],
+	     descriptor.fields[3], descriptor.fields[4], descriptor.fields[5], descriptor.fields[6],
+	     descriptor.fields[7]);
 }
 
 static DescriptorCache::TextureBinding
