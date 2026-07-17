@@ -9327,10 +9327,11 @@ void CheckBasicStorageTextureDescriptor() {
           "PPSA14053 write-only depth-tile storage descriptor fixture is malformed");
   ValidateStorageTexture(Ppsa14053DepthTileStorageTextureResource(), depth_tile, 0x10000);
 
-  // PPSA17219 (Disney Illusion Island) binds a 2D write-only Standard-4KB storage image. Its guest
-  // tiling is never applied (written and sampled through the host image), so ValidateStorageTexture
-  // must accept it; a 3D or readable 4KB image, whose tiling would be interpreted, stays rejected
-  // (the "tile" death case below covers the 3D read+write shape).
+  // PPSA17219 (Disney Illusion Island) binds a 2D write-only Standard-4KB storage image, and
+  // PPSA20955 (The Exit 9, Unreal Engine) binds a 3D one. Their guest tiling is never applied
+  // (written and sampled through the host image), so ValidateStorageTexture must accept both; only a
+  // *readable* 4KB image, whose tiling would be interpreted on upload, stays rejected -- the "tile"
+  // death case below covers that via the 3D read+write shape.
   auto storage_4kb = BasicBgraStorageTextureDescriptor();
   storage_4kb.fields[3] = (storage_4kb.fields[3] & ~(0x1fu << 20u)) |
                           (Prospero::GpuEnumValue(Prospero::TileMode::kStandard4KB) << 20u);
@@ -9340,6 +9341,16 @@ void CheckBasicStorageTextureDescriptor() {
               !BasicBgraStorageTextureResource().read,
           "2D write-only 4KB storage fixture is malformed");
   ValidateStorageTexture(BasicBgraStorageTextureResource(), storage_4kb, 0x870000);
+
+  auto volume_4kb = BasicUintVolumeStorageTextureDescriptor();
+  volume_4kb.fields[3] = (volume_4kb.fields[3] & ~(0x1fu << 20u)) |
+                         (Prospero::GpuEnumValue(Prospero::TileMode::kStandard4KB) << 20u);
+  Require("BasicStorageTexture", "3D write-only 4KB descriptor",
+          volume_4kb.Type() == Prospero::GpuEnumValue(Prospero::ImageType::kColor3D) &&
+              volume_4kb.TileMode() == Prospero::GpuEnumValue(Prospero::TileMode::kStandard4KB) &&
+              !BasicUintVolumeStorageTextureResource().read,
+          "3D write-only 4KB storage fixture is malformed");
+  ValidateStorageTexture(BasicUintVolumeStorageTextureResource(), volume_4kb, 0x10000);
 
   char path[MAX_PATH]{};
   Require("BasicStorageTexture", "host",

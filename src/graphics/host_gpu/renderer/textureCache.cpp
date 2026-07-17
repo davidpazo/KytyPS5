@@ -2004,12 +2004,14 @@ StorageTextureVulkanImage* TextureCache::FindStorageTexture(CommandBuffer*   com
 	const bool supported_depth_tile =
 	    info.tile == Prospero::GpuEnumValue(Prospero::TileMode::kDepth) &&
 	    IsSupportedStorageDepthTile(info.format, info.type, info.width, info.height, info.depth);
-	// See ValidateStorageTexture: 4KB storage is only admitted as a single-layer 2D image, whose
-	// guest tiling is never applied because it is written and sampled entirely through the host
-	// image. A readback would still abort cleanly since no linear->4KB retile exists.
+	// See ValidateStorageTexture: 4KB storage is admitted as a single-layer 2D image or a 3D volume,
+	// whose guest tiling is never applied because it is written and sampled entirely through the host
+	// image (ValidateStorageTexture already restricted this to the write-only case). A readback would
+	// still abort cleanly since no linear->4KB retile exists.
 	const bool supported_4kb_storage =
 	    info.tile == Prospero::GpuEnumValue(Prospero::TileMode::kStandard4KB) &&
-	    info.type == Prospero::GpuEnumValue(Prospero::ImageType::kColor2D) && info.depth == 1;
+	    ((info.type == Prospero::GpuEnumValue(Prospero::ImageType::kColor2D) && info.depth == 1) ||
+	     info.type == Prospero::GpuEnumValue(Prospero::ImageType::kColor3D));
 	if (command == nullptr || ctx == nullptr || info.address == 0 || info.size == 0 ||
 	    info.address >= TRACKER_ADDRESS_SIZE || info.size > TRACKER_ADDRESS_SIZE - info.address ||
 	    info.width == 0 || info.height == 0 || info.depth == 0 || info.levels != 1 ||
