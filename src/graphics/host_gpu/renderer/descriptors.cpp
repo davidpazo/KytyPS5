@@ -359,9 +359,17 @@ static bool IsSupportedStorageTextureDescriptor(const ShaderRecompiler::IR::Imag
 	    tile == Prospero::GpuEnumValue(Prospero::TileMode::kDepth) && !resource.read &&
 	    resource.kind == ShaderRecompiler::IR::ResourceKind::StorageImageUint &&
 	    IsSupportedStorageDepthTile(descriptor.Format(), descriptor.Type(), width, height, depth);
+	// A 2D write-only Standard-4KB storage image never actually applies its guest tiling: the
+	// compute shader writes host-linear coordinates and the storage->sampled reuse path serves the
+	// same host image, so the 4KB layout would only matter if the contents were published back to
+	// guest memory. No linear->4KB retile exists, so such a readback still aborts cleanly in
+	// DownloadColorImage. Restrict the relaxation to that proven-safe shape; 3D or readable 4KB
+	// storage, whose guest tiling would have to be interpreted, stays rejected.
+	const bool supported_4kb_storage =
+	    tile == Prospero::GpuEnumValue(Prospero::TileMode::kStandard4KB) && is_2d && !resource.read;
 	const bool supported_tile = tile == Prospero::GpuEnumValue(Prospero::TileMode::kLinear) ||
 	                            tile == Prospero::GpuEnumValue(Prospero::TileMode::kRenderTarget) ||
-	                            supported_depth_tile;
+	                            supported_4kb_storage || supported_depth_tile;
 	const bool supported_swizzle =
 	    IsSupportedStorageSwizzle(descriptor.Format(), descriptor.DstSelXYZW()) &&
 	    (descriptor.DstSelXYZW() == DstSel(4, 5, 6, 7) || !resource.read);
