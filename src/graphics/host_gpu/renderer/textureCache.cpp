@@ -620,6 +620,7 @@ void TextureCache::RetireImages(const std::vector<CachedImage*>& retire,
 		const bool sampled      = (*it)->kind == CachedImage::Kind::Texture;
 		const bool storage      = (*it)->kind == CachedImage::Kind::StorageTexture;
 		const bool target       = (*it)->kind == CachedImage::Kind::RenderTarget;
+		const bool depth        = (*it)->kind == CachedImage::Kind::DepthTarget;
 		const bool native_image = it->get() == native_image_source;
 		if (native_image) {
 			bool source_valid = (*it)->gpu_modified && !(*it)->buffer_modified;
@@ -646,15 +647,15 @@ void TextureCache::RetireImages(const std::vector<CachedImage*>& retire,
 			(*it)->gpu_modified  = false;
 			native_image_retired = true;
 		}
-		if ((!sampled && !storage && !target && !native_image) || (*it)->gpu_modified ||
+		if ((!sampled && !storage && !target && !depth && !native_image) || (*it)->gpu_modified ||
 		    (storage && ((*it)->buffer_modified || (*it)->info.IsCpuDirty())) ||
-		    (target && (*it)->buffer_modified)) {
+		    ((target || depth) && (*it)->buffer_modified)) {
 			EXIT("TextureCache: invalid image retirement, kind=%u gpu_modified=%d "
 			     "buffer_modified=%d\n",
 			     static_cast<uint32_t>((*it)->kind), (*it)->gpu_modified, (*it)->buffer_modified);
 		}
 		for (uint32_t range = 0; range < (*it)->RangeCount(); range++) {
-			if (target && !native_image &&
+			if ((target || depth) && !native_image &&
 			    m_memory_tracker.IsRegionGpuModified((*it)->Address(range), (*it)->Size(range))) {
 				EXIT("TextureCache: clean target retirement retained tracker GPU ownership, "
 				     "addr=0x%016" PRIx64 " size=0x%016" PRIx64 "\n",
@@ -1658,6 +1659,23 @@ void TextureCache::RetireSampledTargetAliases(GraphicContext* ctx, const ImageIn
 	std::vector<CachedImage*> retire;
 	bool                      wait_idle = false;
 	for (const auto& cached: m_images) {
+		if (cached->kind == CachedImage::Kind::DepthTarget) {
+			switch (ClassifySampledDepthOverlap(requested, cached->depth, cached->gpu_modified,
+			                                    cached->buffer_modified, cached->ctx == ctx)) {
+				case SampledDepthOverlap::None: continue;
+				// Only clean targets are retired here, so the readback loop below skips them and
+				// never reaches its color-only download for a depth image.
+				case SampledDepthOverlap::RetireTarget: retire.push_back(cached.get()); continue;
+				case SampledDepthOverlap::Unsupported:
+					EXIT("TextureCache: unsupported sampled/depth-target alias, sampled=0x%016" PRIx64
+					     "+0x%016" PRIx64 " depth=0x%016" PRIx64 "+0x%016" PRIx64
+					     " stencil=0x%016" PRIx64 "+0x%016" PRIx64
+					     " same_context=%d gpu=%d buffer=%d\n",
+					     requested.address, requested.size, cached->depth.address, cached->depth.size,
+					     cached->depth.stencil_address, cached->depth.stencil_size,
+					     cached->ctx == ctx, cached->gpu_modified, cached->buffer_modified);
+			}
+		}
 		if (cached->kind != CachedImage::Kind::RenderTarget) {
 			continue;
 		}
@@ -1923,8 +1941,25 @@ VulkanImage* TextureCache::FindTexture(CommandBuffer* command, GraphicContext* c
 				continue;
 			}
 			EXIT("TextureCache: sampled image shares pages with GPU target, addr=0x%016" PRIx64
-			     " size=0x%016" PRIx64 " target_kind=%u\n",
-			     info.address, info.size, static_cast<uint32_t>(cached->kind));
+			     " size=0x%016" PRIx64 " target_kind=%u byte_overlap=%d gpu_modified=%d"
+			     " buffer_modified=%d same_context=%d ranges=%u range0=0x%016" PRIx64
+			     "+0x%016" PRIx64 " range1=0x%016" PRIx64 "+0x%016" PRIx64
+			     " requested_info={format=%u extent=%ux%ux%u pitch=%u levels=%u tile=%u type=%u}"
+			     " depth_info={format=%d guest_format=%u extent=%ux%u pitch=%u bytes=%u tile=%u"
+			     " layers=%u load_clear=%d stencil=0x%016" PRIx64 "+0x%016" PRIx64
+			     " htile=0x%016" PRIx64 "+0x%016" PRIx64 "}\n",
+			     info.address, info.size, static_cast<uint32_t>(cached->kind),
+			     cached->OverlapsRange(info.address, info.size, false), cached->gpu_modified,
+			     cached->buffer_modified, cached->ctx == ctx, cached->RangeCount(),
+			     cached->Address(0), cached->Size(0),
+			     cached->RangeCount() > 1 ? cached->Address(1) : 0,
+			     cached->RangeCount() > 1 ? cached->Size(1) : 0, info.format, info.width, info.height,
+			     info.depth, info.pitch, info.levels, info.tile, info.type,
+			     static_cast<int>(cached->depth.format), cached->depth.guest_format,
+			     cached->depth.width, cached->depth.height, cached->depth.pitch,
+			     cached->depth.bytes_per_element, cached->depth.tile_mode, cached->depth.layers,
+			     cached->depth.depth_load_clear, cached->depth.stencil_address,
+			     cached->depth.stencil_size, cached->depth.htile_address, cached->depth.htile_size);
 		}
 		const auto overlap =
 		    ClassifySampledOverlap(info, cached->info, cached->gpu_modified, cached->ctx == ctx);

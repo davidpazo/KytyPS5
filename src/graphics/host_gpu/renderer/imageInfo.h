@@ -186,6 +186,7 @@ enum class RenderTargetOverlap : uint8_t {
 	Unsupported
 };
 enum class SampledOverlap : uint8_t { None, ReadOnlyAlias, Unsupported };
+enum class SampledDepthOverlap : uint8_t { None, RetireTarget, Unsupported };
 enum class StorageSampledOverlap : uint8_t { None, ExactImage, RetireStorage, Unsupported };
 enum class StorageSampledViewShape : uint8_t { Image2D, Image2DArray, Image3D, Unsupported };
 enum class StorageImageOverlap : uint8_t { None, RetireSampled, PageNeighbor, Unsupported };
@@ -577,6 +578,28 @@ ClassifySampledRenderTargetOverlap(const ImageInfo& sampled, const RenderTargetI
 	}
 	return same_context && !target_buffer_modified ? RenderTargetOverlap::RetireTarget
 	                                               : RenderTargetOverlap::Unsupported;
+}
+
+[[nodiscard]] inline SampledDepthOverlap
+ClassifySampledDepthOverlap(const ImageInfo& sampled, const DepthTargetInfo& depth,
+                            bool depth_gpu_modified, bool depth_buffer_modified,
+                            bool same_context) {
+	const bool depth_overlap =
+	    ImagePageRangesOverlap(sampled.address, sampled.size, depth.address, depth.size);
+	const bool stencil_overlap =
+	    depth.stencil_address != 0 && depth.stencil_size != 0 &&
+	    ImagePageRangesOverlap(sampled.address, sampled.size, depth.stencil_address,
+	                           depth.stencil_size);
+	if (!depth_overlap && !stencil_overlap) {
+		return SampledDepthOverlap::None;
+	}
+	// A depth target whose contents were already read back owns nothing the guest cannot supply, so
+	// the range the guest recycled for this texture reads correctly from guest memory and the stale
+	// target can be retired. A target that still owns its contents would need a GPU-driven depth
+	// readback, which only the CPU fault path performs today.
+	return !depth_gpu_modified && !depth_buffer_modified && same_context
+	           ? SampledDepthOverlap::RetireTarget
+	           : SampledDepthOverlap::Unsupported;
 }
 
 [[nodiscard]] inline StorageImageOverlap

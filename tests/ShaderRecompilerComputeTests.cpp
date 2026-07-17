@@ -10013,6 +10013,59 @@ void CheckStorageTextureSampledReuse() {
                   StorageSampledOverlap::Unsupported,
           "a storage image owning data or state was retired for a recycled range");
 
+  // PPSA15929 also recycles the pages of a read-back 6-layer D16 shadow target for a
+  // 512x512 single-byte texture. The target owns nothing once its readback completed,
+  // so guest memory serves the sampled read and the stale target must be retired.
+  ImageInfo ppsa15929_depth_sampled{};
+  ppsa15929_depth_sampled.address = 0x748c1000;
+  ppsa15929_depth_sampled.size = 0x40000;
+  ppsa15929_depth_sampled.width = 512;
+  ppsa15929_depth_sampled.height = 512;
+  ppsa15929_depth_sampled.pitch = 512;
+  ppsa15929_depth_sampled.tile = Prospero::GpuEnumValue(Prospero::TileMode::kStandard4KB);
+  ppsa15929_depth_sampled.type = Prospero::GpuEnumValue(Prospero::ImageType::kColor2D);
+  DepthTargetInfo ppsa15929_depth{};
+  ppsa15929_depth.address = 0x748d0000;
+  ppsa15929_depth.size = 0x60000;
+  ppsa15929_depth.htile_address = 0x646b8000;
+  ppsa15929_depth.htile_size = 0x30000;
+  ppsa15929_depth.format = VK_FORMAT_D16_UNORM;
+  ppsa15929_depth.guest_format = Prospero::GpuEnumValue(Prospero::BufferFormat::k16UNorm);
+  ppsa15929_depth.pitch = 256;
+  ppsa15929_depth.bytes_per_element = 2;
+  ppsa15929_depth.tile_mode = Prospero::GpuEnumValue(Prospero::TileMode::kDepth);
+  ppsa15929_depth.layers = 6;
+  Require("StorageTextureSampledReuse", "PPSA15929 recycled depth range",
+          ClassifySampledDepthOverlap(ppsa15929_depth_sampled, ppsa15929_depth, false,
+                                      false, true) ==
+              SampledDepthOverlap::RetireTarget,
+          "read-back depth target on a recycled range was not retired for sampling");
+  Require("StorageTextureSampledReuse", "recycled depth ownership",
+          ClassifySampledDepthOverlap(ppsa15929_depth_sampled, ppsa15929_depth, true,
+                                      false, true) ==
+                  SampledDepthOverlap::Unsupported &&
+              ClassifySampledDepthOverlap(ppsa15929_depth_sampled, ppsa15929_depth,
+                                          false, true, true) ==
+                  SampledDepthOverlap::Unsupported &&
+              ClassifySampledDepthOverlap(ppsa15929_depth_sampled, ppsa15929_depth,
+                                          false, false, false) ==
+                  SampledDepthOverlap::Unsupported,
+          "a depth target owning data or state was retired for a recycled range");
+  auto ppsa15929_depth_disjoint = ppsa15929_depth;
+  ppsa15929_depth_disjoint.address = 0x74a00000;
+  Require("StorageTextureSampledReuse", "disjoint depth target",
+          ClassifySampledDepthOverlap(ppsa15929_depth_sampled, ppsa15929_depth_disjoint,
+                                      false, false, true) == SampledDepthOverlap::None,
+          "disjoint depth target was classified as a sampled alias");
+  auto ppsa15929_depth_stencil = ppsa15929_depth_disjoint;
+  ppsa15929_depth_stencil.stencil_address = 0x748d0000;
+  ppsa15929_depth_stencil.stencil_size = 0x10000;
+  Require("StorageTextureSampledReuse", "depth stencil range",
+          ClassifySampledDepthOverlap(ppsa15929_depth_sampled, ppsa15929_depth_stencil,
+                                      false, false, true) ==
+              SampledDepthOverlap::RetireTarget,
+          "a stencil plane sharing the sampled range was not classified as an alias");
+
   ImageInfo ppsa02604_storage{};
   ppsa02604_storage.address = 0x7c690000;
   ppsa02604_storage.size = 0x870000;
