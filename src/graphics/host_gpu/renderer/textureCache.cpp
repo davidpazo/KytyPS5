@@ -2516,11 +2516,18 @@ DepthStencilVulkanImage* TextureCache::FindDepthTarget(CommandBuffer* command, G
 	}
 	RequireRetirementIsolation(retire, "depth target", info.address, info.size);
 	RetireImages(retire, native_depth_source.get());
-	if (!CanLoadStencilAttachment(info, native_depth_source != nullptr &&
-	                                        native_depth_source->stencil_initialized)) {
+	const bool stencil_ready =
+	    (native_depth_source != nullptr && native_depth_source->stencil_initialized) ||
+	    CanRawLoadStencilForNewTarget(info, stencil_source.cpu_current);
+	if (!CanLoadStencilAttachment(info, stencil_ready)) {
 		EXIT("TextureCache: new stencil target requires a clear before stencil access, "
-		     "addr=0x%016" PRIx64 " size=0x%016" PRIx64 "\n",
-		     info.stencil_address, info.stencil_size);
+		     "addr=0x%016" PRIx64 " size=0x%016" PRIx64 " stencil_access=%d stencil_load_clear=%d"
+		     " stencil_htile_compressed=%d raw_loadable=%d native_depth=%d stencil_src{cpu_current=%d"
+		     " cpu_dirty=%d} depth_src{cpu_current=%d cpu_dirty=%d} depth_buffer_overlap=%d\n",
+		     info.stencil_address, info.stencil_size, info.stencil_access, info.stencil_load_clear,
+		     info.stencil_htile_compressed, CanLoadRawStencilPlane(info), native_depth_source != nullptr,
+		     stencil_source.cpu_current, stencil_source.cpu_dirty, depth_source.cpu_current,
+		     depth_source.cpu_dirty, depth_buffer_overlap);
 	}
 	auto cached                 = std::make_shared<CachedImage>();
 	cached->kind                = CachedImage::Kind::DepthTarget;

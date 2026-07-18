@@ -355,6 +355,17 @@ SelectDepthTransitionSource(bool depth_load_clear, bool sampled_native_available
 	return has_stencil && !target.stencil_htile_compressed;
 }
 
+// A freshly created depth+stencil target that loads (does not clear) an accessed stencil plane can
+// be initialized straight from guest memory when the plane is a raw (non-HTile) layout and the
+// guest stencil bytes are current: FindDepthTarget detiles the stencil aspect from guest the same
+// way it loads depth, so the target is not left with undefined stencil contents. This mirrors the
+// guest-authoritative upload the depth plane already trusts and keeps HTile-compressed or
+// non-current stencil rejected.
+[[nodiscard]] inline bool CanRawLoadStencilForNewTarget(const DepthTargetInfo& target,
+                                                        bool stencil_source_cpu_current) {
+	return !target.stencil_load_clear && CanLoadRawStencilPlane(target) && stencil_source_cpu_current;
+}
+
 [[nodiscard]] inline bool IsDepthTargetRangeCompatible(const DepthTargetInfo& target,
                                                        uint64_t address, uint64_t size) {
 	if (address == 0 || size == 0 || address > UINT64_MAX - size) {

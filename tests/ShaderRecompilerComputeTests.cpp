@@ -11305,6 +11305,23 @@ void CheckImageOverlapResolution() {
           !CanLoadRawStencilPlane(depth),
           "HTile-compressed guest stencil plane was silently admitted");
   depth.stencil_htile_compressed = false;
+  depth.stencil_load_clear = false;
+  Require("ImageOverlapResolution", "raw stencil new-target load",
+          CanRawLoadStencilForNewTarget(depth, true),
+          "raw current guest stencil plane could not initialize a new loaded target");
+  Require("ImageOverlapResolution", "non-current stencil new-target load",
+          !CanRawLoadStencilForNewTarget(depth, false),
+          "non-current guest stencil plane was admitted to initialize a new target");
+  depth.stencil_htile_compressed = true;
+  Require("ImageOverlapResolution", "compressed stencil new-target load",
+          !CanRawLoadStencilForNewTarget(depth, true),
+          "HTile-compressed stencil plane was admitted to initialize a new target");
+  depth.stencil_htile_compressed = false;
+  depth.stencil_load_clear = true;
+  Require("ImageOverlapResolution", "cleared stencil skips raw load",
+          !CanRawLoadStencilForNewTarget(depth, true),
+          "cleared stencil unnecessarily reported a raw guest load");
+  depth.stencil_load_clear = false;
   depth.address = sampled.address;
   depth.size = 0xff0000;
   depth.stencil_address = sampled.address + 0x1000000;
