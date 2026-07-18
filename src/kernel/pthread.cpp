@@ -758,12 +758,13 @@ static KYTY_SYSV_ABI void* RunOnGuestStack(void* arg, pthread_entry_func_t func,
 #if defined(__x86_64__) || defined(_M_X64)
 	void*      ret       = nullptr;
 	const auto guest_rsp = reinterpret_cast<uintptr_t>(stack_top) & ~static_cast<uintptr_t>(0x0f);
-	const auto guest_rbp = guest_rsp - 4u * sizeof(uint64_t);
-
-	auto* guest_root_frame = reinterpret_cast<uintptr_t*>(guest_rbp);
-	guest_root_frame[0]    = 0;
-	guest_root_frame[1]    = 0;
-
+	// Enter the guest routine with rbp == 0, exactly as real hardware does at a thread entry, so the
+	// routine's prologue saves a null caller frame and the guest frame-pointer chain terminates
+	// cleanly here. A guest stack-walker (UE captures backtraces for asserts/ensures/mem-tracking)
+	// then stops at the entry instead of running off into the host's frames and faulting. The old
+	// fake root frame sat below the entry's rsp (guest_rsp - 0x20) and was immediately clobbered by
+	// the entry's own locals, so the chain was never actually terminated -- the root cause of the UE
+	// RenderingThread access violation during frame-pointer backtrace capture.
 	g_guest_entry_return_rsp = guest_rsp - sizeof(uint64_t);
 
 	uintptr_t host_rsp = 0;
@@ -809,7 +810,7 @@ static KYTY_SYSV_ABI void* RunOnGuestStack(void* arg, pthread_entry_func_t func,
 	             "movq %%rsp, %%r12\n\t"
 	             "movq %%rbp, %%r13\n\t"
 	             "movq %[guest_rsp], %%rsp\n\t"
-	             "movq %[guest_rbp], %%rbp\n\t"
+	             "xorq %%rbp, %%rbp\n\t"
 	             "callq *%%rsi\n\t"
 	             "movq %%r13, %%rbp\n\t"
 	             "movq %%r12, %%rsp\n\t"
@@ -822,7 +823,7 @@ static KYTY_SYSV_ABI void* RunOnGuestStack(void* arg, pthread_entry_func_t func,
 	             "popq %%r13\n\t"
 	             "popq %%r12\n\t"
 	             : "=a"(ret), "+D"(arg), "+S"(func)
-	             : [guest_rsp] "r"(guest_rsp), [guest_rbp] "r"(guest_rbp)
+	             : [guest_rsp] "r"(guest_rsp)
 	             : "cc", "memory", "rcx", "rdx", "r8", "r9", "r10", "r11", "xmm0", "xmm1", "xmm2",
 	               "xmm3", "xmm4", "xmm5", "xmm6", "xmm7", "xmm8", "xmm9", "xmm10", "xmm11",
 	               "xmm12", "xmm13", "xmm14", "xmm15");

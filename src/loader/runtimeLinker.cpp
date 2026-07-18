@@ -338,18 +338,18 @@ static KYTY_SYSV_ABI void RunEntry(uint64_t addr, EntryParams* params, atexit_fu
 	if (stack_top != nullptr) {
 		const auto guest_rsp =
 		    reinterpret_cast<uintptr_t>(stack_top) & ~static_cast<uintptr_t>(0x0f);
-		const auto guest_rbp = guest_rsp - 4u * sizeof(uint64_t);
-
-		auto* guest_root_frame = reinterpret_cast<uintptr_t*>(guest_rbp);
-		guest_root_frame[0]    = 0;
-		guest_root_frame[1]    = 0;
-
+		// Enter the guest with rbp == 0, as real hardware does at a module/thread entry, so the
+		// entry's prologue saves a null caller frame and the guest frame-pointer chain terminates
+		// cleanly here. Guest stack-walkers (UE captures backtraces for asserts/ensures/mem-tracking)
+		// then stop at the entry instead of running off into the host's frames and faulting. The old
+		// fake root frame sat below the entry's rsp and was clobbered by the entry's own locals, so
+		// the chain was never actually terminated.
 		asm volatile("pushq %%r12\n\t"
 		             "pushq %%r13\n\t"
 		             "movq %%rsp, %%r12\n\t"
 		             "movq %%rbp, %%r13\n\t"
 		             "movq %[guest_rsp], %%rsp\n\t"
-		             "movq %[guest_rbp], %%rbp\n\t"
+		             "xorq %%rbp, %%rbp\n\t"
 		             "callq *%[func]\n\t"
 		             "movq %%r13, %%rbp\n\t"
 		             "movq %%r12, %%rsp\n\t"
@@ -357,26 +357,23 @@ static KYTY_SYSV_ABI void RunEntry(uint64_t addr, EntryParams* params, atexit_fu
 		             "popq %%r12\n\t"
 		             :
 		             : [func] "r"(func), "D"(params),
-		               "S"(atexit_func), [guest_rsp] "r"(guest_rsp), [guest_rbp] "r"(guest_rbp)
+		               "S"(atexit_func), [guest_rsp] "r"(guest_rsp)
 		             : "cc", "memory", "rax", "rcx", "rdx", "r8", "r9", "r10", "r11", "xmm0",
 		               "xmm1", "xmm2", "xmm3", "xmm4", "xmm5", "xmm6", "xmm7", "xmm8", "xmm9",
 		               "xmm10", "xmm11", "xmm12", "xmm13", "xmm14", "xmm15");
 		return;
 	}
 
-	uintptr_t guest_root_frame[2] = {};
-
 	asm volatile("pushq %%r12\n\t"
 	             "pushq %%r13\n\t"
 	             "movq %%rbp, %%r12\n\t"
-	             "movq %[guest_rbp], %%rbp\n\t"
+	             "xorq %%rbp, %%rbp\n\t"
 	             "callq *%[func]\n\t"
 	             "movq %%r12, %%rbp\n\t"
 	             "popq %%r13\n\t"
 	             "popq %%r12\n\t"
 	             :
-	             : [func] "r"(func), "D"(params),
-	               "S"(atexit_func), [guest_rbp] "r"(guest_root_frame)
+	             : [func] "r"(func), "D"(params), "S"(atexit_func)
 	             : "cc", "memory", "rax", "rcx", "rdx", "r8", "r9", "r10", "r11", "xmm0", "xmm1",
 	               "xmm2", "xmm3", "xmm4", "xmm5", "xmm6", "xmm7", "xmm8", "xmm9", "xmm10", "xmm11",
 	               "xmm12", "xmm13", "xmm14", "xmm15");
@@ -728,6 +725,44 @@ static bool KytyExceptionHandler(const Common::HostException::ExceptionInfo& exc
 		dump_guest_qwords("guest r13", info->r13);
 		dump_guest_qwords("guest r14", info->r14);
 		dump_guest_qwords("guest r15", info->r15);
+
+		{
+			// Diagnostic: safely walk the guest frame-pointer (rbp) chain the way a guest
+			// backtrace walker would, validating every read, to reveal exactly where the chain
+			// leaves valid guest frames (guest<->host boundary vs an optimized guest frame).
+			auto* linker = Common::Singleton<Loader::RuntimeLinker>::Instance();
+			LOGF("guest rbp-chain walk (from rbp=%016" PRIx64 "):\n", info->rbp);
+			uint64_t fp = info->rbp;
+			for (int i = 0; i < 48; i++) {
+				if (fp == 0) {
+					LOGF("  [%d] rbp=0 -> clean chain end\n", i);
+					break;
+				}
+				if ((fp & 0x7u) != 0) {
+					LOGF("  [%d] rbp=%016" PRIx64 " -> misaligned, WOULD-STOP\n", i, fp);
+					break;
+				}
+				if (!is_readable_range(fp, 2u * sizeof(uint64_t))) {
+					LOGF("  [%d] rbp=%016" PRIx64 " -> unreadable, WOULD-FAULT\n", i, fp);
+					break;
+				}
+				const uint64_t saved = reinterpret_cast<const uint64_t*>(fp)[0];
+				const uint64_t ret   = reinterpret_cast<const uint64_t*>(fp)[1];
+				auto*          pr    = linker->FindProgramByAddr(ret);
+				auto*          ps    = linker->FindProgramByAddr(saved);
+				LOGF("  [%d] rbp=%016" PRIx64 " saved_rbp=%016" PRIx64 " (%s) ret=%016" PRIx64
+				     " (%s off=%016" PRIx64 ")\n",
+				     i, fp, saved, (ps == nullptr ? "NON-MODULE" : "module"), ret,
+				     (pr == nullptr ? "???" : "module"),
+				     (pr == nullptr ? 0 : ret - pr->base_vaddr));
+				if (saved != 0 && saved <= fp) {
+					LOGF("  [%d] next saved_rbp=%016" PRIx64
+					     " is not above current rbp -> a validating walker WOULD-STOP here\n",
+					     i, saved);
+				}
+				fp = saved;
+			}
+		}
 
 		if (info->exception_address == 0x000000090064364e && info->rbx != 0) {
 			auto* local = reinterpret_cast<const uint64_t*>(info->rbx);
