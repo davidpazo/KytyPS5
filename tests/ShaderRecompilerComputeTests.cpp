@@ -11201,6 +11201,59 @@ void CheckImageOverlapResolution() {
                                    mismatched_depth) ==
                   DepthOverlap::Unsupported,
           "mipmapped or format-mismatched depth load was admitted");
+
+  // PPSA09477 (Quake II): a clean captured D32_SFLOAT_S8_UINT depth plane whose stencil lives at
+  // a separate, non-aliased guest range. The sampled record aliases only the depth plane, so
+  // retiring it loses no stencil data (the stencil aspect is loaded independently from guest).
+  ImageInfo ppsa09477_sampled_depth{};
+  ppsa09477_sampled_depth.address = 0x10adc00000ull;
+  ppsa09477_sampled_depth.size = 0x870000ull;
+  ppsa09477_sampled_depth.format =
+      Prospero::GpuEnumValue(Prospero::BufferFormat::k32Float);
+  ppsa09477_sampled_depth.width = 1920;
+  ppsa09477_sampled_depth.height = 1080;
+  ppsa09477_sampled_depth.pitch = 1920;
+  ppsa09477_sampled_depth.tile =
+      Prospero::GpuEnumValue(Prospero::TileMode::kDepth);
+  ppsa09477_sampled_depth.type =
+      Prospero::GpuEnumValue(Prospero::ImageType::kColor2D);
+  DepthTargetInfo ppsa09477_depth{};
+  ppsa09477_depth.address = ppsa09477_sampled_depth.address;
+  ppsa09477_depth.size = ppsa09477_sampled_depth.size;
+  ppsa09477_depth.format = VK_FORMAT_D32_SFLOAT_S8_UINT;
+  ppsa09477_depth.guest_format = ppsa09477_sampled_depth.format;
+  ppsa09477_depth.width = ppsa09477_sampled_depth.width;
+  ppsa09477_depth.height = ppsa09477_sampled_depth.height;
+  ppsa09477_depth.pitch = ppsa09477_sampled_depth.pitch;
+  ppsa09477_depth.bytes_per_element = 4;
+  ppsa09477_depth.tile_mode = ppsa09477_sampled_depth.tile;
+  ppsa09477_depth.stencil_address = 0x10aec00000ull;
+  ppsa09477_depth.stencil_size = 0x280000ull;
+  Require("ImageOverlapResolution", "PPSA09477 exact depth+stencil load",
+          ClassifyDepthOverlap(ppsa09477_sampled_depth, false,
+                               ppsa09477_depth) ==
+              DepthOverlap::RetireSampled,
+          "captured CPU-owned D32S8 depth plane with a separate stencil range was not retired");
+  Require("ImageOverlapResolution", "PPSA09477 GPU depth+stencil load",
+          ClassifyDepthOverlap(ppsa09477_sampled_depth, true,
+                               ppsa09477_depth) ==
+              DepthOverlap::Unsupported,
+          "captured GPU-owned D32S8 sampled depth was admitted for retirement");
+  auto ppsa09477_stencil_alias = ppsa09477_depth;
+  ppsa09477_stencil_alias.stencil_address = ppsa09477_sampled_depth.address + 0x1000;
+  ppsa09477_stencil_alias.stencil_size = 0x2000;
+  Require("ImageOverlapResolution", "PPSA09477 stencil-aliasing guard",
+          ClassifyDepthOverlap(ppsa09477_sampled_depth, false,
+                               ppsa09477_stencil_alias) ==
+              DepthOverlap::Unsupported,
+          "D32S8 load whose sampled record also aliases the stencil range was admitted");
+  auto ppsa09477_depth_only_stencil = ppsa09477_depth;
+  ppsa09477_depth_only_stencil.format = VK_FORMAT_D32_SFLOAT;
+  Require("ImageOverlapResolution", "PPSA09477 depth-only format guard",
+          ClassifyDepthOverlap(ppsa09477_sampled_depth, false,
+                               ppsa09477_depth_only_stencil) ==
+              DepthOverlap::Unsupported,
+          "stencil-bearing D32_SFLOAT (non-S8) load was admitted for retirement");
   Require("ImageOverlapResolution", "depth transition source",
           SelectDepthTransitionSource(true, true, false, false, false, true) ==
                   DepthTransitionSource::None &&

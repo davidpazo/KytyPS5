@@ -483,21 +483,33 @@ ClassifyBufferImageWrite(uint64_t buffer_address, uint64_t buffer_size, uint64_t
 		return DepthOverlap::None;
 	}
 	const bool has_stencil = depth.stencil_address != 0 || depth.stencil_size != 0;
-	const bool exact_depth_format =
-	    sampled.format == depth.guest_format &&
-	    ((depth.guest_format == Prospero::GpuEnumValue(Prospero::BufferFormat::k16UNorm) &&
-	      depth.format == VK_FORMAT_D16_UNORM && depth.bytes_per_element == 2) ||
-	     (depth.guest_format == Prospero::GpuEnumValue(Prospero::BufferFormat::k32Float) &&
-	      depth.format == VK_FORMAT_D32_SFLOAT && depth.bytes_per_element == 4));
-	const bool exact_depth_load =
-	    !has_stencil && !depth.depth_load_clear && sampled.address == depth.address &&
-	    sampled.size == depth.size && sampled.width == depth.width &&
-	    sampled.height == depth.height && sampled.pitch == depth.pitch && sampled.base_level == 0 &&
-	    sampled.levels == 1 && sampled.view_levels == 1 && sampled.tile == depth.tile_mode &&
-	    sampled.depth == 1 &&
+	// Geometry shared by the depth-only and depth+stencil exact-load retire paths: the sampled
+	// record must be a single-level 2D image whose range and layout exactly match the depth plane.
+	const bool exact_depth_geometry =
+	    sampled.address == depth.address && sampled.size == depth.size &&
+	    sampled.width == depth.width && sampled.height == depth.height &&
+	    sampled.pitch == depth.pitch && sampled.base_level == 0 && sampled.levels == 1 &&
+	    sampled.view_levels == 1 && sampled.tile == depth.tile_mode && sampled.depth == 1 &&
 	    sampled.type == Prospero::GpuEnumValue(Prospero::ImageType::kColor2D) &&
-	    depth.layers == 1 && sampled.base_array == 0 && exact_depth_format;
-	if (!sampled_gpu_modified && exact_depth_load) {
+	    depth.layers == 1 && sampled.base_array == 0 && sampled.format == depth.guest_format;
+	const bool depth_only_format =
+	    (depth.guest_format == Prospero::GpuEnumValue(Prospero::BufferFormat::k16UNorm) &&
+	     depth.format == VK_FORMAT_D16_UNORM && depth.bytes_per_element == 2) ||
+	    (depth.guest_format == Prospero::GpuEnumValue(Prospero::BufferFormat::k32Float) &&
+	     depth.format == VK_FORMAT_D32_SFLOAT && depth.bytes_per_element == 4);
+	// D32_SFLOAT_S8_UINT keeps its stencil plane at a separate guest address. When the sampled
+	// record aliases only the depth plane (stencil_overlap == false), retiring it loses no stencil
+	// data -- the stencil aspect is loaded independently from guest memory in FindDepthTarget -- so
+	// the same clean-retire reasoning as the depth-only case applies.
+	const bool depth_stencil_format =
+	    depth.guest_format == Prospero::GpuEnumValue(Prospero::BufferFormat::k32Float) &&
+	    depth.format == VK_FORMAT_D32_SFLOAT_S8_UINT && depth.bytes_per_element == 4;
+	const bool exact_depth_load =
+	    !has_stencil && !depth.depth_load_clear && exact_depth_geometry && depth_only_format;
+	const bool exact_depth_stencil_load = has_stencil && !stencil_overlap &&
+	                                      !depth.depth_load_clear && exact_depth_geometry &&
+	                                      depth_stencil_format;
+	if (!sampled_gpu_modified && (exact_depth_load || exact_depth_stencil_load)) {
 		return DepthOverlap::RetireSampled;
 	}
 	if (sampled.address == depth.address && !sampled_gpu_modified && depth.depth_load_clear &&
