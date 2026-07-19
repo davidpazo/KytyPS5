@@ -1274,13 +1274,21 @@ StorageTextureVulkanImage* TextureCache::FindStorageTexture(CommandBuffer*   com
 	const bool supported_depth_tile =
 	    info.tile == Prospero::GpuEnumValue(Prospero::TileMode::kDepth) &&
 	    IsSupportedStorageDepthTile(info.format, info.type, info.width, info.height, info.depth);
+	// A write-only Standard-4KB storage image bypasses its guest tiling (see the matching relaxation
+	// in ValidateStorageTexture): it is written host-linear and served to the storage->sampled reuse
+	// path from the host image, never retiled to 4KB. The descriptor validation already guaranteed
+	// this image is write-only, so accept 2D single-slice and 3D Standard-4KB here.
+	const bool supported_4kb_storage =
+	    info.tile == Prospero::GpuEnumValue(Prospero::TileMode::kStandard4KB) &&
+	    ((info.type == Prospero::GpuEnumValue(Prospero::ImageType::kColor2D) && info.depth == 1) ||
+	     info.type == Prospero::GpuEnumValue(Prospero::ImageType::kColor3D));
 	if (info.address == 0 || info.size == 0 || info.address >= TRACKER_ADDRESS_SIZE ||
 	    info.size > TRACKER_ADDRESS_SIZE - info.address || info.width == 0 || info.height == 0 ||
 	    info.depth == 0 || info.levels == 0 || info.levels > 16 || info.base_level >= info.levels ||
 	    info.view_levels != 1 || info.base_array != 0 || !supported_type ||
 	    (info.tile != Prospero::GpuEnumValue(Prospero::TileMode::kLinear) &&
 	     info.tile != Prospero::GpuEnumValue(Prospero::TileMode::kRenderTarget) &&
-	     !supported_depth_tile) ||
+	     !supported_depth_tile && !supported_4kb_storage) ||
 	    !IsSupportedStorageSwizzle(info.format, info.swizzle)) {
 		EXIT("TextureCache: unsupported storage-image request, command=%p ctx=%p "
 		     "addr=0x%016" PRIx64 " size=0x%016" PRIx64
