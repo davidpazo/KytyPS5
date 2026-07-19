@@ -338,18 +338,17 @@ static KYTY_SYSV_ABI void RunEntry(uint64_t addr, EntryParams* params, atexit_fu
 	if (stack_top != nullptr) {
 		const auto guest_rsp =
 		    reinterpret_cast<uintptr_t>(stack_top) & ~static_cast<uintptr_t>(0x0f);
-		const auto guest_rbp = guest_rsp - 4u * sizeof(uint64_t);
-
-		auto* guest_root_frame = reinterpret_cast<uintptr_t*>(guest_rbp);
-		guest_root_frame[0]    = 0;
-		guest_root_frame[1]    = 0;
-
+		// Enter the guest with rbp == 0, as real hardware does at a module/thread entry, so the
+		// entry's prologue saves a null caller frame and the guest frame-pointer chain terminates
+		// cleanly here. Guest stack-walkers (UE captures backtraces for asserts/ensures/mem-tracking)
+		// then stop at the entry instead of running off into the host's frames and faulting. A fake
+		// root frame below the entry's rsp would be clobbered by the entry's own locals.
 		asm volatile("pushq %%r12\n\t"
 		             "pushq %%r13\n\t"
 		             "movq %%rsp, %%r12\n\t"
 		             "movq %%rbp, %%r13\n\t"
 		             "movq %[guest_rsp], %%rsp\n\t"
-		             "movq %[guest_rbp], %%rbp\n\t"
+		             "xorq %%rbp, %%rbp\n\t"
 		             "callq *%[func]\n\t"
 		             "movq %%r13, %%rbp\n\t"
 		             "movq %%r12, %%rsp\n\t"
@@ -357,26 +356,23 @@ static KYTY_SYSV_ABI void RunEntry(uint64_t addr, EntryParams* params, atexit_fu
 		             "popq %%r12\n\t"
 		             :
 		             : [func] "r"(func), "D"(params),
-		               "S"(atexit_func), [guest_rsp] "r"(guest_rsp), [guest_rbp] "r"(guest_rbp)
+		               "S"(atexit_func), [guest_rsp] "r"(guest_rsp)
 		             : "cc", "memory", "rax", "rcx", "rdx", "r8", "r9", "r10", "r11", "xmm0",
 		               "xmm1", "xmm2", "xmm3", "xmm4", "xmm5", "xmm6", "xmm7", "xmm8", "xmm9",
 		               "xmm10", "xmm11", "xmm12", "xmm13", "xmm14", "xmm15");
 		return;
 	}
 
-	uintptr_t guest_root_frame[2] = {};
-
 	asm volatile("pushq %%r12\n\t"
 	             "pushq %%r13\n\t"
 	             "movq %%rbp, %%r12\n\t"
-	             "movq %[guest_rbp], %%rbp\n\t"
+	             "xorq %%rbp, %%rbp\n\t"
 	             "callq *%[func]\n\t"
 	             "movq %%r12, %%rbp\n\t"
 	             "popq %%r13\n\t"
 	             "popq %%r12\n\t"
 	             :
-	             : [func] "r"(func), "D"(params),
-	               "S"(atexit_func), [guest_rbp] "r"(guest_root_frame)
+	             : [func] "r"(func), "D"(params), "S"(atexit_func)
 	             : "cc", "memory", "rax", "rcx", "rdx", "r8", "r9", "r10", "r11", "xmm0", "xmm1",
 	               "xmm2", "xmm3", "xmm4", "xmm5", "xmm6", "xmm7", "xmm8", "xmm9", "xmm10", "xmm11",
 	               "xmm12", "xmm13", "xmm14", "xmm15");
